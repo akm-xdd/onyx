@@ -5,7 +5,7 @@ from datetime import datetime
 from datetime import timezone
 from typing import cast
 
-from onyx.auth.schemas import AuthBackend
+# from onyx.auth.schemas import AuthBackend
 from onyx.cache.interface import CacheBackendType
 from onyx.configs.constants import AuthType
 from onyx.configs.constants import QueryHistoryType
@@ -143,7 +143,7 @@ MASK_CREDENTIAL_PREFIX = (
     os.environ.get("MASK_CREDENTIAL_PREFIX", "True").lower() != "false"
 )
 
-AUTH_BACKEND = AuthBackend(os.environ.get("AUTH_BACKEND") or AuthBackend.REDIS.value)
+# AUTH_BACKEND = AuthBackend(os.environ.get("AUTH_BACKEND") or AuthBackend.REDIS.value)
 
 SESSION_EXPIRE_TIME_SECONDS = int(
     os.environ.get("SESSION_EXPIRE_TIME_SECONDS")

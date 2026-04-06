@@ -75,11 +75,11 @@ def generate_time_range_filter(
     if start is not None:
         time_start = datetime.fromtimestamp(start, tz=timezone.utc).isoformat()
         time_range_filter += (
-            f" and {GoogleFields.MODIFIED_TIME.value} >= '{time_start}'"
+            f" and (modifiedTime >= '{time_start}' or createdTime >= '{time_start}')"
         )
     if end is not None:
         time_stop = datetime.fromtimestamp(end, tz=timezone.utc).isoformat()
-        time_range_filter += f" and {GoogleFields.MODIFIED_TIME.value} <= '{time_stop}'"
+        time_range_filter += f" and modifiedTime <= '{time_stop}'"
     return time_range_filter
 
 
