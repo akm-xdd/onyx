@@ -18,3 +18,7 @@ class BlobStorageInterface(ABC):
     @abstractmethod
     def exists(self, key: str) -> bool:
         raise NotImplementedError
+    
+    @abstractmethod
+    def count(self, prefix: str) -> int:
+        raise NotImplementedError   

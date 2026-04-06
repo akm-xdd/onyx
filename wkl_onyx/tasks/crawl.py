@@ -24,9 +24,15 @@ STALE_RUN_TIMEOUT_HOURS = 2
 def _safe_segment(name: str) -> str:
     return name.strip().replace("/", "_").replace(":", "_").replace("?", "_").replace("#", "_") or "_"
 
-def _upload_files(crawler, files, source_type, job_id, storage):
+def job_prefix(user_email: str, source_type: str, job_id: int, job_name: str | None) -> str:
+    job_segment = _safe_segment(job_name) if job_name else str(job_id)
+    return f"{_safe_segment(user_email)}/{source_type}/{job_segment}/"
+
+def _upload_files(crawler, files, source_type, job_id, job_name, user_email, storage):
     count = 0
     errors = 0
+    job_segment = _safe_segment(job_name) if job_name else str(job_id)
+    email_segment = _safe_segment(user_email)
     for file_meta in files:
         try:
             content, filename, metadata = crawler.download(file_meta)
@@ -40,7 +46,7 @@ def _upload_files(crawler, files, source_type, job_id, storage):
                 if folder_path
                 else _safe_segment(file_meta["id"])
             )
-            storage_key = f"{source_type}/{job_id}/{folder_prefix}/{filename}"
+            storage_key = f"{email_segment}/{source_type}/{job_segment}/{folder_prefix}/{filename}"
             storage.upload(storage_key, content)
             print(f"[trigger_crawl] Uploaded: {storage_key}")
             count += 1
@@ -48,7 +54,6 @@ def _upload_files(crawler, files, source_type, job_id, storage):
             print(f"[trigger_crawl] Failed to process {file_meta.get('name')}: {e}")
             errors += 1
     return count, errors
-
 
 @celery_app.task(bind=True, name="trigger_crawl")
 def trigger_crawl(self, crawl_job_id: int):
@@ -106,6 +111,8 @@ def trigger_crawl(self, crawl_job_id: int):
             run_id = run.id
             source_type = crawl_job.source_type
             job_id = crawl_job.id
+            job_name = crawl_job.name
+            user_email = credential.user_email
 
             print(f"[trigger_crawl] {'Incremental' if is_incremental else 'Full'} crawl from {datetime.utcfromtimestamp(start_time)}")
             print(f"[trigger_crawl] Created run id={run_id} type={run.run_type}")
@@ -122,7 +129,7 @@ def trigger_crawl(self, crawl_job_id: int):
         storage = get_storage()
 
         total_count, total_errors = _run_crawl_loop(
-            crawler, source_type, job_id, storage,
+            crawler, source_type, job_id, job_name, user_email, storage,
             crawl_job_id, checkpoint_data, start_time=0 if not is_incremental else start_time
         )
 
@@ -202,13 +209,13 @@ def _get_checkpoint(db, crawl_job_id: int, is_incremental: bool) -> dict | None:
     return dict(last.checkpoint_json) if last else None
 
 
-def _run_crawl_loop(crawler, source_type, job_id, storage, crawl_job_id, checkpoint_data, start_time):
+def _run_crawl_loop(crawler, source_type, job_id, job_name, user_email, storage, crawl_job_id, checkpoint_data, start_time):
     total_count = 0
     total_errors = 0
 
     while True:
         files, next_checkpoint = crawler.fetch_files(checkpoint_data, start=start_time)
-        count, errors = _upload_files(crawler, files, source_type, job_id, storage)
+        count, errors = _upload_files(crawler, files, source_type, job_id, job_name, user_email, storage)
         total_count += count
         total_errors += errors
 

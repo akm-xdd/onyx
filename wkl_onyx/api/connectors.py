@@ -95,6 +95,7 @@ def create_crawl_job(
     credential_id: int = Form(...),
     source_type: str = Form(...),
     config_json: str = Form("{}"),
+    name: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
     ct = db.query(ConnectorType).filter(ConnectorType.source_type == source_type).first()
@@ -137,6 +138,7 @@ def create_crawl_job(
         source_type=source_type,
         config_json=parsed_config,
         is_active=True,
+        name=name,
     )
     db.add(crawl_job)
     db.commit()

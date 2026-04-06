@@ -43,3 +43,10 @@ class S3BlobStorage(BlobStorageInterface):
             return True
         except ClientError:
             return False
+        
+    def count(self, prefix: str) -> int:
+        paginator = self.client.get_paginator("list_objects_v2")
+        total = 0
+        for page in paginator.paginate(Bucket=self.bucket, Prefix=prefix):
+            total += page.get("KeyCount", 0)
+        return total
