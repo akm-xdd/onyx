@@ -69,8 +69,10 @@ def get_schema(source_type: str, db: Session = Depends(get_db)):
 @router.post("/credentials")
 def create_credential(
     source_type: str = Form(...),
+    user_id: int = Form(...),
+    user_email: str = Form(...),
     credential_json: str = Form("{}"),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db),  
 ):
     ct = db.query(ConnectorType).filter(ConnectorType.source_type == source_type).first()
     if not ct:
@@ -80,12 +82,13 @@ def create_credential(
     credential = Credential(
         source_type=source_type,
         credential_json=cred_data,
+        user_id=user_id,
+        user_email=user_email,
     )
     db.add(credential)
     db.commit()
     db.refresh(credential)
     return {"credential_id": credential.id}
-
 
 @router.post("/crawl-jobs")
 def create_crawl_job(
@@ -154,6 +157,35 @@ def get_credentials(
         credentials = db.query(Credential).all()
     return [{"id": c.id, "source_type": c.source_type} for c in credentials]
 
+@router.get("/credentials/by-user")
+def get_credentials_by_user(
+    user_email: str = Query(...),
+    source_type: str = Query(None),
+    db: Session = Depends(get_db),
+):
+    q = db.query(Credential).filter(
+        Credential.user_email == user_email,
+        Credential.is_deleted == False,
+    )
+    if source_type:
+        q = q.filter(Credential.source_type == source_type)
+
+    credentials = q.order_by(Credential.created_at.desc()).all()
+
+    return [
+        {
+            "id": c.id,
+            "source_type": c.source_type,
+            "user_email": c.user_email,
+            "is_active": c.is_active,
+            "created_at": c.created_at,
+            "updated_at": c.updated_at,
+        }
+        for c in credentials
+    ]
+
+
+
 
 @router.get("/credentials/{credential_id}")
 def get_credential(credential_id: int, source_type: str = Query(None), db: Session = Depends(get_db)):
@@ -170,6 +202,43 @@ def get_credential(credential_id: int, source_type: str = Query(None), db: Sessi
 def get_credential_crawl_jobs(credential_id: int, db: Session = Depends(get_db)):
     crawl_jobs = db.query(CrawlJob).filter(CrawlJob.credential_id == credential_id).all()
     return [{"id": c.id, "source_type": c.source_type} for c in crawl_jobs]
+
+
+@router.get("/crawl-jobs/by-user")
+def get_crawl_jobs_by_user(
+    user_email: str = Query(...),
+    source_type: str = Query(None),
+    is_active: bool = Query(None),
+    db: Session = Depends(get_db),
+):
+    q = (
+        db.query(CrawlJob)
+        .join(Credential, CrawlJob.credential_id == Credential.id)
+        .filter(
+            Credential.user_email == user_email,
+            Credential.is_deleted == False,
+        )
+    )
+    if source_type:
+        q = q.filter(CrawlJob.source_type == source_type)
+    if is_active is not None:
+        q = q.filter(CrawlJob.is_active == is_active)
+
+    crawl_jobs = q.order_by(CrawlJob.created_at.desc()).all()
+
+    return [
+        {
+            "id": cj.id,
+            "credential_id": cj.credential_id,
+            "source_type": cj.source_type,
+            "config_json": cj.config_json,
+            "is_active": cj.is_active,
+            "last_run_at": cj.last_run_at,
+            "created_at": cj.created_at,
+        }
+        for cj in crawl_jobs
+    ]
+
 
 @router.put("/crawl-jobs/{crawl_job_id}")
 def update_crawl_job(crawl_job_id: int, db: Session = Depends(get_db)):

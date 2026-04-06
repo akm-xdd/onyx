@@ -21,12 +21,13 @@ class DropboxCrawler(BaseCrawler):
     def fetch_files(self, checkpoint: dict | None, start: float = 0) -> tuple[list[dict], dict]:
         items = []
 
-        if start > 0:
-            doc_batches = self.connector.poll_source(start=start, end=time.time())
-        else:
-            doc_batches = self.connector.load_from_state()
+        if getattr(self, "_doc_generator", None) is None:
+            if start > 0:
+                self._doc_generator = self.connector.poll_source(start=start, end=time.time())
+            else:
+                self._doc_generator = self.connector.load_from_state()
 
-        for batch in doc_batches:
+        for batch in self._doc_generator:
             for doc_or_node in batch:
                 if not isinstance(doc_or_node, Document):
                     continue
@@ -44,6 +45,7 @@ class DropboxCrawler(BaseCrawler):
                     return items, {"has_more": True}
 
         return items, {"has_more": False}
+
 
     def _serialize_document(self, doc: Document) -> str:
         parts = []
@@ -75,4 +77,4 @@ class DropboxCrawler(BaseCrawler):
                 else:
                     metadata["folder_path"] = []
 
-        return content.encode("utf-8"), filename, metadata
+        return content.encode("latin-1"), filename, metadata

@@ -100,30 +100,16 @@ class DropboxConnector(LoadConnector, PollConnector):
 
                     downloaded_file = self._download_file(entry.path_display)
                     link = self._get_shared_link(entry.path_display)
-                    try:
-                        text = extract_file_text(
-                            BytesIO(downloaded_file),
-                            file_name=entry.name,
-                            break_on_unprocessable=False,
+                    batch.append(
+                        Document(
+                            id=f"doc:{entry.id}",
+                            sections=[TextSection(link=link, text=downloaded_file.decode("latin-1"))],
+                            source=DocumentSource.DROPBOX,
+                            semantic_identifier=entry.name,
+                            doc_updated_at=modified_time,
+                            metadata={"type": "article", "path": entry.path_display},
                         )
-                        batch.append(
-                            Document(
-                                id=f"doc:{entry.id}",
-                                sections=[TextSection(link=link, text=text)],
-                                source=DocumentSource.DROPBOX,
-                                semantic_identifier=entry.name,
-                                doc_updated_at=modified_time,
-                                metadata={
-                                    "type": "article", 
-                                    "path": entry.path_display
-                                },
-                            )
-                        )
-                    except Exception as e:
-                        logger.exception(
-                            f"Error decoding file {entry.path_display} as utf-8 error occurred: {e}"
-                        )
-
+                    )
                 elif isinstance(entry, FolderMetadata):
                     yield from self._yield_files_recursive(entry.path_lower, start, end)
 
