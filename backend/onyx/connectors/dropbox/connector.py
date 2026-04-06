@@ -113,7 +113,10 @@ class DropboxConnector(LoadConnector, PollConnector):
                                 source=DocumentSource.DROPBOX,
                                 semantic_identifier=entry.name,
                                 doc_updated_at=modified_time,
-                                metadata={"type": "article"},
+                                metadata={
+                                    "type": "article", 
+                                    "path": entry.path_display
+                                },
                             )
                         )
                     except Exception as e:

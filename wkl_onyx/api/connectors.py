@@ -107,12 +107,12 @@ def create_crawl_job(
     parsed_config = json.loads(config_json)
 
     if source_type == "google_drive":
-        folder_urls = parsed_config.get("folder_urls", [])
-        shared_drive_urls = parsed_config.get("shared_drive_urls", [])
+        shared_folder_urls = parsed_config.get("shared_folder_urls", "")
+        shared_drive_urls = parsed_config.get("shared_drive_urls", "")
         
         parsed_config = {
-            "shared_folder_urls": ",".join(folder_urls) if folder_urls else None,
-            "shared_drive_urls": ",".join(shared_drive_urls) if shared_drive_urls else None,
+            "shared_folder_urls": shared_folder_urls,
+            "shared_drive_urls": shared_drive_urls,
             "include_shared_drives": False,
             "include_my_drives": False,
             "include_files_shared_with_me": False,
@@ -128,7 +128,6 @@ def create_crawl_job(
             "include_site_pages": parsed_config.get("include_site_pages", False),
             "include_site_documents": parsed_config.get("include_site_documents", True)
         }
-
 
     crawl_job = CrawlJob(
         credential_id=credential_id,

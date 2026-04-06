@@ -65,5 +65,14 @@ class DropboxCrawler(BaseCrawler):
         }
         if file_meta.get("metadata"):
             metadata.update(file_meta["metadata"])
+            
+            # Translate the Dropbox path_display into the standard folder_path list
+            path_display = metadata.get("path")
+            if path_display and isinstance(path_display, str):
+                parts = [p for p in path_display.split('/') if p]
+                if len(parts) > 1:
+                    metadata["folder_path"] = parts[:-1]
+                else:
+                    metadata["folder_path"] = []
 
         return content.encode("utf-8"), filename, metadata
