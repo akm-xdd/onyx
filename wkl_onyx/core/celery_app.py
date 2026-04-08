@@ -1,5 +1,7 @@
 from celery import Celery
 from core.config import settings
+from celery.signals import setup_logging as celery_setup_logging
+from core.logger import setup_logging
 
 celery_app = Celery(
     "wkl_onyx",
@@ -23,3 +25,7 @@ celery_app.conf.update(
         }
     },
 )
+
+@celery_setup_logging.connect
+def _(**kwargs):
+    setup_logging()

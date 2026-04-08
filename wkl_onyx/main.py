@@ -4,6 +4,10 @@ from api.oauth import router as oauth_router
 from api.files import router as files_router
 from api.connectors import router as connectors_router
 
+from core.logger import setup_logging
+
+setup_logging()
+
 app = FastAPI(title="Wokelo Onyx")
 
 app.add_middleware(

@@ -125,8 +125,7 @@ def create_crawl_job(
             "include_my_drives": False,
             "include_files_shared_with_me": False,
         }
-        
-        print("parsed_config: \n", parsed_config)
+
     
     if source_type == "sharepoint":
         parsed_config = {

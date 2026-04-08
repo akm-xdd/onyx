@@ -1,9 +1,7 @@
 from onyx.connectors.google_drive.doc_conversion import download_request
-import io
 import json
 import time
 
-from googleapiclient.http import MediaIoBaseDownload
 
 from connectors.base import BaseCrawler
 from onyx.connectors.google_drive.connector import GoogleDriveConnector
@@ -12,11 +10,13 @@ from onyx.connectors.google_drive.models import GDriveMimeType
 from onyx.connectors.google_utils.resources import get_drive_service
 from onyx.connectors.google_drive.doc_conversion import (
     build_folder_path,
-    download_request,
     GOOGLE_MIME_TYPES_TO_EXPORT,
 )
-from datetime import datetime
 from core.config import settings
+
+import logging
+
+logger = logging.getLogger(__name__)
 
 DRIVE_FOLDER_TYPE = "application/vnd.google-apps.folder"
 DRIVE_SHORTCUT_TYPE = "application/vnd.google-apps.shortcut"
@@ -33,7 +33,7 @@ DEFAULT_BATCH_SIZE = 50
 class GoogleDriveCrawler(BaseCrawler):
     def __init__(self, crawl_job, credential):
         super().__init__(crawl_job, credential)
-        print(f"[GoogleDriveCrawler] config_json: {crawl_job.config_json}")
+        logger.info(f"[GoogleDriveCrawler] config: {crawl_job.config_json}")
         self.connector = GoogleDriveConnector(
             include_my_drives=crawl_job.config_json.get("include_my_drives", True),
             include_shared_drives=crawl_job.config_json.get("include_shared_drives", False),
@@ -67,7 +67,7 @@ class GoogleDriveCrawler(BaseCrawler):
         files = []
         skipped = 0
 
-        print(f"[fetch_files] checkpoint stage: {ckpt.completion_stage}, start={start}")
+        logger.info(f"[fetch_files] checkpoint stage: {ckpt.completion_stage}, start={start}")
 
         generator = self.connector._fetch_drive_items(
             field_type=DriveFileFieldType.STANDARD,
@@ -78,18 +78,8 @@ class GoogleDriveCrawler(BaseCrawler):
 
         for retrieved_file in generator:
             if retrieved_file.error:
-                print(f"[fetch_files] error on item: {retrieved_file.error}")
+                logger.exception(f"[fetch_files] error on item: {retrieved_file.error}")
                 continue
-
-            # filter manually by modifiedTime if start > 0
-            # if start > 0:
-            #     modified_time_str = retrieved_file.drive_file.get("modifiedTime")
-            #     if modified_time_str:
-            #         modified_ts = datetime.fromisoformat(
-            #             modified_time_str.replace("Z", "+00:00")
-            #         ).timestamp()
-            #         if modified_ts < start:
-            #             continue
 
             mime = retrieved_file.drive_file.get("mimeType", "")
             if mime in [DRIVE_FOLDER_TYPE, DRIVE_SHORTCUT_TYPE]:
@@ -99,7 +89,7 @@ class GoogleDriveCrawler(BaseCrawler):
             if size_str:
                 size = int(size_str)
                 if size > max_size_bytes:
-                    print(f"[fetch_files] Skipping large file: {retrieved_file.drive_file.get('name')} ({size / 1024 / 1024:.1f} MB)")
+                    logger.warning(f"[fetch_files] Skipping large file: {retrieved_file.drive_file.get('name')} ({size / 1024 / 1024:.1f} MB)")
                     skipped += 1
                     continue
 
@@ -117,7 +107,7 @@ class GoogleDriveCrawler(BaseCrawler):
             if len(files) >= batch_size:
                 break
 
-        print(f"[fetch_files] Fetched {len(files)} files, skipped {skipped} large files")
+        logger.info(f"[fetch_files] Fetched {len(files)} files, skipped {skipped} large files")
         next_checkpoint = ckpt.model_dump(mode="json")
         return files, next_checkpoint
 
@@ -130,7 +120,7 @@ class GoogleDriveCrawler(BaseCrawler):
         size = file_meta.get("size")
         max_size = settings.MAX_FILE_SIZE_MB * 1024 * 1024
 
-        print(f"[download] Starting: {file_name} ({f'{size / 1024 / 1024:.1f} MB' if size else 'unknown size'})")
+        logger.info(f"[download] Starting: {file_name} ({f'{size / 1024 / 1024:.1f} MB' if size else 'unknown size'})")
 
         if mime_type in GOOGLE_MIME_TYPES_TO_EXPORT:
             export_mime = GOOGLE_MIME_TYPES_TO_EXPORT[mime_type]
@@ -153,5 +143,5 @@ class GoogleDriveCrawler(BaseCrawler):
             "folder_path_str": " / ".join(folder_path),  # human-readable string
         }
 
-        print(f"[download] Done: {file_name}, folder: {metadata['folder_path_str']}")
+        logger.info(f"[download] Done: {file_name}, folder: {metadata['folder_path_str']}")
         return content, file_name, metadata

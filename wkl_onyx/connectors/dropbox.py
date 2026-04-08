@@ -5,6 +5,9 @@ from dropbox.files import FileMetadata  # type: ignore[import-untyped]
 from connectors.base import BaseCrawler
 from core.config import settings
 from onyx.connectors.dropbox.connector import DropboxConnector
+import logging
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_BATCH_SIZE = 100
 
@@ -59,7 +62,7 @@ class DropboxCrawler(BaseCrawler):
 
             # Skip oversized files
             if entry.size and entry.size > max_size_bytes:
-                print(f"[DropboxCrawler] Skipping large file: {entry.name} ({entry.size / 1024 / 1024:.1f} MB)")
+                logger.warning(f"[DropboxCrawler] Skipping large file: {entry.name} ({entry.size / 1024 / 1024:.1f} MB)")
                 skipped += 1
                 continue
 
@@ -75,7 +78,7 @@ class DropboxCrawler(BaseCrawler):
                 ),
             })
 
-        print(f"[DropboxCrawler] Page returned {len(items)} files, skipped {skipped} large files, has_more={result.has_more}")
+        logger.info(f"[DropboxCrawler] Page returned {len(items)} files, skipped {skipped} large files, has_more={result.has_more}")
 
         next_checkpoint = {
             "cursor": result.cursor,
@@ -89,7 +92,7 @@ class DropboxCrawler(BaseCrawler):
         path = file_meta["path_display"]
         name = file_meta.get("name", "unknown")
 
-        print(f"[DropboxCrawler] Downloading: {name} ({file_meta.get('size', 'unknown')} bytes)")
+        logger.info(f"[DropboxCrawler] Downloading: {name} ({file_meta.get('size', 'unknown')} bytes)")
 
         # Actual download happens HERE — not during listing
         content = self.connector._download_file(path)
@@ -116,5 +119,5 @@ class DropboxCrawler(BaseCrawler):
                 metadata["folder_path"] = []
                 metadata["folder_path_str"] = ""
 
-        print(f"[DropboxCrawler] Done: {filename}, folder: {metadata.get('folder_path_str', '')}")
+        logger.info(f"[DropboxCrawler] Done: {filename}, folder: {metadata.get('folder_path_str', '')}")
         return content, filename, metadata

@@ -14,6 +14,10 @@ from models.checkpoint import Checkpoint
 from models.failed_file import FailedFile, RetryStatus
 from storage import get_storage
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 _redis = redis.from_url(settings.REDIS_URL)
@@ -40,7 +44,7 @@ def _upload_files(crawler, files, source_type, job_id, job_name, user_email, sto
         try:
             content, filename, metadata = crawler.download(file_meta)
             if not content:
-                print(f"[trigger_crawl] Failed to process {file_meta.get('name')}: No content")
+                logger.exception(f"[trigger_crawl] Failed to process {file_meta.get('name')}: No content")
                 errors += 1
                 failed_files.append(file_meta)
                 continue
@@ -52,10 +56,10 @@ def _upload_files(crawler, files, source_type, job_id, job_name, user_email, sto
             )
             storage_key = f"{email_segment}/{source_type}/{job_segment}/{folder_prefix}/{filename}"
             storage.upload(storage_key, content)
-            print(f"[trigger_crawl] Uploaded: {storage_key}")
+            logger.info(f"[trigger_crawl] Uploaded: {storage_key}")
             count += 1
         except Exception as e:
-            print(f"[trigger_crawl] Failed to process {file_meta.get('name')}: {e}")
+            logger.exception(f"[trigger_crawl] Failed to process {file_meta.get('name')}: {e}")
             errors += 1
             failed_files.append(file_meta)
     return count, errors, failed_files
@@ -68,7 +72,7 @@ def trigger_crawl(self, crawl_job_id: int):
 
     lock_key = f"crawl_lock:{crawl_job_id}"
     if not _redis.set(lock_key, "1", nx=True, ex=LOCK_TTL):
-        print(f"[trigger_crawl] Job {crawl_job_id} already locked, skipping")
+        logger.warning(f"[trigger_crawl] Job {crawl_job_id} already locked, skipping")
         return
 
     run_id = None
@@ -87,7 +91,7 @@ def trigger_crawl(self, crawl_job_id: int):
                 CrawlRun.status == RunStatus.RUNNING,
             ).first()
             if active:
-                print(f"[trigger_crawl] Job {crawl_job_id} already has an active run, skipping")
+                logger.warning(f"[trigger_crawl] Job {crawl_job_id} already has an active run, skipping")
                 return
 
             last_successful = (
@@ -119,8 +123,8 @@ def trigger_crawl(self, crawl_job_id: int):
             job_name = crawl_job.name
             user_email = credential.user_email
 
-            print(f"[trigger_crawl] {'Incremental' if is_incremental else 'Full'} crawl from {datetime.utcfromtimestamp(start_time)}")
-            print(f"[trigger_crawl] Created run id={run_id} type={run.run_type}")
+            logger.info(f"[trigger_crawl] {'Incremental' if is_incremental else 'Full'} crawl from {datetime.utcfromtimestamp(start_time)}")
+            logger.info(f"[trigger_crawl] Created run id={run_id} type={run.run_type}")
 
             backend_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../backend"))
             if backend_path not in sys.path:
@@ -147,7 +151,7 @@ def trigger_crawl(self, crawl_job_id: int):
             total_count += recovered
             total_errors -= recovered
         except Exception as e:
-            print(f"[trigger_crawl] Failed to retry failed files: {e}")
+            logger.exception(f"[trigger_crawl] Failed to retry failed files: {e}")
 
         # write final status
         with SessionLocal() as db:
@@ -191,7 +195,7 @@ def trigger_crawl(self, crawl_job_id: int):
 
                         if job.consecutive_failures >= 5:
                             job.is_active = False
-                            print(f"[trigger_crawl] Job {crawl_job_id} disabled after {job.consecutive_failures} consecutive failures: {job.failure_reason}")
+                            logger.warning(f"[trigger_crawl] Job {crawl_job_id} disabled after {job.consecutive_failures} consecutive failures: {job.failure_reason}")
 
                     # disable web scraping task after successful run
                     if source_type == "web" and run.status == RunStatus.SUCCESS:
@@ -200,10 +204,10 @@ def trigger_crawl(self, crawl_job_id: int):
                     pass
 
             db.commit()
-            print(f"[trigger_crawl] Run {run_id} → {run.status} ({total_count} uploaded, {total_errors} errors)")
+            logger.info(f"[trigger_crawl] Run {run_id} → {run.status} ({total_count} uploaded, {total_errors} errors)")
 
     except Exception as e:
-        print(f"[trigger_crawl] Fatal error: {e}")
+        logger.exception(f"[trigger_crawl] Fatal error: {e}")
         if run_id:
                 with SessionLocal() as db:
                     run = db.query(CrawlRun).filter(CrawlRun.id == run_id).first()
@@ -220,7 +224,7 @@ def trigger_crawl(self, crawl_job_id: int):
                             job.failure_reason = str(e)[:500]
                             if job.consecutive_failures >= 5:
                                 job.is_active = False
-                                print(f"[trigger_crawl] Job {crawl_job_id} disabled after {job.consecutive_failures} consecutive failures: {job.failure_reason}")
+                                logger.warning(f"[trigger_crawl] Job {crawl_job_id} disabled after {job.consecutive_failures} consecutive failures: {job.failure_reason}")
                             db.commit()
                     except AttributeError:
                         pass
@@ -245,7 +249,7 @@ def _recover_stale_runs(db, crawl_job_id: int) -> None:
         run.error = "Timed out - worker likely crashed"
         run.completed_at = datetime.utcnow()
         _redis.delete(f"crawl_lock:{crawl_job_id}")
-        print(f"[recover_stale_runs] Marked run {run.id} as failed (stale), cleared lock")
+        logger.warning(f"[recover_stale_runs] Marked run {run.id} as failed (stale), cleared lock")
     if stale:
         db.commit()
 
@@ -298,7 +302,7 @@ def _retry_failed_files(crawler, failed_files, source_type, job_id, job_name, us
     if not failed_files:
         return 0, []
 
-    print(f"[trigger_crawl] Retrying {len(failed_files)} failed files for run {run_id}")
+    logger.info(f"[trigger_crawl] Retrying {len(failed_files)} failed files for run {run_id}")
 
     # So as pending first
     with SessionLocal() as db:
@@ -333,11 +337,11 @@ def _retry_failed_files(crawler, failed_files, source_type, job_id, job_name, us
             )
             storage_key = f"{email_segment}/{source_type}/{job_segment}/{folder_prefix}/{filename}"
             storage.upload(storage_key, content)
-            print(f"[trigger_crawl] Retry succeeded: {storage_key}")
+            logger.info(f"[trigger_crawl] Retry succeeded: {storage_key}")
             recovered += 1
             retry_results.append((file_meta, True, None))
         except Exception as e:
-            print(f"[trigger_crawl] Retry failed for {file_meta.get('name')}: {e}")
+            logger.exception(f"[trigger_crawl] Retry failed for {file_meta.get('name')}: {e}")
             still_failed.append(file_meta)
             retry_results.append((file_meta, False, str(e)[:500]))
 
