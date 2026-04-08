@@ -5,6 +5,7 @@ from storage import get_storage
 from models.crawl_job import CrawlJob
 from models.crawl_run import CrawlRun
 from models.credential import Credential
+from models.failed_file import FailedFile, RetryStatus
 from core.db import get_db
 from sqlalchemy.orm import Session
 from fastapi import Query
@@ -20,7 +21,7 @@ ALLOWED_EXTENSIONS = {
 
 
 def _get_last_run_info(db: Session, crawl_job_id: int) -> dict:
-    """Get the last run status and failed files for a crawl job."""
+    """Get the last run status and still-failed files (after retry) for a crawl job."""
     last_run = (
         db.query(CrawlRun)
         .filter(CrawlRun.crawl_job_id == crawl_job_id)
@@ -29,15 +30,25 @@ def _get_last_run_info(db: Session, crawl_job_id: int) -> dict:
     )
     if not last_run:
         return {"last_run_status": None, "failed_files": []}
-    
-    failed_files = []
-    if last_run.error:
-        try:
-            error_data = json.loads(last_run.error)
-            failed_files = error_data.get("failed_files", [])
-        except (json.JSONDecodeError, TypeError):
-            pass
-    
+
+    failed_rows = (
+        db.query(FailedFile)
+        .filter(
+            FailedFile.crawl_run_id == last_run.id,
+            FailedFile.status.in_([RetryStatus.FAILED, RetryStatus.PENDING]),
+        )
+        .all()
+    )
+    failed_files = [
+        {
+            "id": r.file_meta.get("id", "unknown"),
+            "name": r.file_meta.get("name", "unknown"),
+            "type": r.file_meta.get("mimeType") or r.file_meta.get("mime_type", "unknown"), # google is mimeType, dropbox is mime_type
+            "error": r.error_message,
+        }
+        for r in failed_rows
+    ]
+
     return {
         "last_run_status": last_run.status,
         "failed_files": failed_files,
