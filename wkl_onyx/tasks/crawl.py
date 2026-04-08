@@ -185,7 +185,7 @@ def trigger_crawl(self, crawl_job_id: int):
                         job.consecutive_failures = (job.consecutive_failures or 0) + 1
                         job.failure_reason = run.error[:500] if run.error else "Unknown error"
 
-                        if job.consecutive_failures >= 5:
+                        if job.consecutive_failures >= settings.MAX_CONSECUTIVE_FAILURES:
                             job.is_active = False
                             print(f"[trigger_crawl] Job {crawl_job_id} disabled after {job.consecutive_failures} consecutive failures: {job.failure_reason}")
 
@@ -197,6 +197,10 @@ def trigger_crawl(self, crawl_job_id: int):
 
             db.commit()
             print(f"[trigger_crawl] Run {run_id} → {run.status} ({total_count} uploaded, {total_errors} errors)")
+
+            if run.status == RunStatus.FAILED and job.is_active and job.consecutive_failures < settings.MAX_CONSECUTIVE_FAILURES:
+                print(f"[trigger_crawl] Retrying job {crawl_job_id} immediately (attempt {job.consecutive_failures + 1})")
+                trigger_crawl.delay(crawl_job_id)
 
     except Exception as e:
         print(f"[trigger_crawl] Fatal error: {e}")
@@ -214,10 +218,14 @@ def trigger_crawl(self, crawl_job_id: int):
                         if job:
                             job.consecutive_failures = (job.consecutive_failures or 0) + 1
                             job.failure_reason = str(e)[:500]
-                            if job.consecutive_failures >= 5:
+                            if job.consecutive_failures >= settings.MAX_CONSECUTIVE_FAILURES:
                                 job.is_active = False
                                 print(f"[trigger_crawl] Job {crawl_job_id} disabled after {job.consecutive_failures} consecutive failures: {job.failure_reason}")
                             db.commit()
+                        
+                        if job.is_active and job.consecutive_failures < settings.MAX_CONSECUTIVE_FAILURES:
+                            print(f"[trigger_crawl] Retrying job {crawl_job_id} after fatal error (attempt {job.consecutive_failures + 1})")
+                            trigger_crawl.delay(crawl_job_id)
                     except AttributeError:
                         pass
         raise

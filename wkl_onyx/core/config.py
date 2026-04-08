@@ -31,6 +31,9 @@ class Settings(BaseSettings):
 
     MAX_FILE_SIZE_MB: int = 10
 
+    # Crawl job failure handling
+    MAX_CONSECUTIVE_FAILURES: int = 5
+
     @property
     def SQLALCHEMY_DATABASE_URL(self) -> str:
         return (
