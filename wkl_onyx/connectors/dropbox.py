@@ -1,8 +1,10 @@
-import time
+from datetime import timezone
+
+from dropbox.files import FileMetadata  # type: ignore[import-untyped]
 
 from connectors.base import BaseCrawler
+from core.config import settings
 from onyx.connectors.dropbox.connector import DropboxConnector
-from onyx.connectors.models import Document
 
 DEFAULT_BATCH_SIZE = 100
 
@@ -18,63 +20,101 @@ class DropboxCrawler(BaseCrawler):
         self.connector.load_credentials(credential.credential_json)
         self.batch_size = config.get("batch_size", DEFAULT_BATCH_SIZE)
 
+    @property
+    def _client(self):
+        """Authenticated Dropbox SDK client, set up by Onyx's load_credentials."""
+        if self.connector.dropbox_client is None:
+            raise RuntimeError("Dropbox client not initialized — call load_credentials first")
+        return self.connector.dropbox_client
+
     def fetch_files(self, checkpoint: dict | None, start: float = 0) -> tuple[list[dict], dict]:
-        items = []
+        """List files from Dropbox using the SDK directly (metadata only)."""
+        items: list[dict] = []
+        max_size_bytes = settings.MAX_FILE_SIZE_MB * 1024 * 1024
+        skipped = 0
 
-        if getattr(self, "_doc_generator", None) is None:
-            if start > 0:
-                self._doc_generator = self.connector.poll_source(start=start, end=time.time())
-            else:
-                self._doc_generator = self.connector.load_from_state()
+        cursor = checkpoint.get("cursor") if checkpoint else None
 
-        for batch in self._doc_generator:
-            for doc_or_node in batch:
-                if not isinstance(doc_or_node, Document):
+        if cursor:
+            result = self._client.files_list_folder_continue(cursor)
+        else:
+            result = self._client.files_list_folder(
+                "",
+                recursive=True,
+                include_non_downloadable_files=False,
+            )
+
+        # Process all entries from this page
+        for entry in result.entries:
+            if not isinstance(entry, FileMetadata):
+                continue
+
+            # Incremental: skip files older than last successful run
+            if start > 0 and entry.client_modified:
+                modified = entry.client_modified
+                if modified.tzinfo is None:
+                    modified = modified.replace(tzinfo=timezone.utc)
+                if modified.timestamp() < start:
                     continue
 
-                items.append({
-                    "id": doc_or_node.id,
-                    "name": doc_or_node.semantic_identifier or doc_or_node.id,
-                    "content": self._serialize_document(doc_or_node),
-                    "doc_updated_at": doc_or_node.doc_updated_at.isoformat() if doc_or_node.doc_updated_at else None,
-                    "metadata": doc_or_node.metadata,
-                    "source": str(doc_or_node.source),
-                })
+            # Skip oversized files
+            if entry.size and entry.size > max_size_bytes:
+                print(f"[DropboxCrawler] Skipping large file: {entry.name} ({entry.size / 1024 / 1024:.1f} MB)")
+                skipped += 1
+                continue
 
-                if len(items) >= self.batch_size:
-                    return items, {"has_more": True}
+            items.append({
+                "id": entry.id,
+                "name": entry.name,
+                "path_display": entry.path_display,
+                "size": entry.size,
+                "client_modified": (
+                    entry.client_modified.isoformat()
+                    if entry.client_modified
+                    else None
+                ),
+            })
 
-        return items, {"has_more": False}
+        print(f"[DropboxCrawler] Page returned {len(items)} files, skipped {skipped} large files, has_more={result.has_more}")
 
-
-    def _serialize_document(self, doc: Document) -> str:
-        parts = []
-        for section in doc.sections:
-            if hasattr(section, 'text') and section.text:
-                parts.append(section.text)
-        return "\n".join(parts)
+        next_checkpoint = {
+            "cursor": result.cursor,
+            "has_more": result.has_more,
+        }
+        return items, next_checkpoint
 
     def download(self, file_meta: dict) -> tuple[bytes, str, dict]:
-        content = file_meta.get("content", "")
+        """Download a single file's content from Dropbox via the SDK.
+        """
+        path = file_meta["path_display"]
         name = file_meta.get("name", "unknown")
+
+        print(f"[DropboxCrawler] Downloading: {name} ({file_meta.get('size', 'unknown')} bytes)")
+
+        # Actual download happens HERE — not during listing
+        content = self.connector._download_file(path)
+
+        # Sanitize filename
         filename = name
         for char in ['/', '\\', ':', '*', '?', '"', '<', '>', '|', '#']:
             filename = filename.replace(char, "_")
 
-        metadata = {
-            "source": file_meta.get("source", ""),
-            "doc_updated_at": file_meta.get("doc_updated_at"),
+        # Build metadata with folder path
+        metadata: dict = {
+            "source": "dropbox",
+            "client_modified": file_meta.get("client_modified"),
+            "size": file_meta.get("size"),
         }
-        if file_meta.get("metadata"):
-            metadata.update(file_meta["metadata"])
-            
-            # Translate the Dropbox path_display into the standard folder_path list
-            path_display = metadata.get("path")
-            if path_display and isinstance(path_display, str):
-                parts = [p for p in path_display.split('/') if p]
-                if len(parts) > 1:
-                    metadata["folder_path"] = parts[:-1]
-                else:
-                    metadata["folder_path"] = []
 
-        return content.encode("latin-1"), filename, metadata
+        # Extract folder path from path_display  (e.g. "/Projects/Q1/report.pdf")
+        if path:
+            parts = [p for p in path.split("/") if p]
+            if len(parts) > 1:
+                metadata["folder_path"] = parts[:-1]
+                metadata["folder_path_str"] = " / ".join(parts[:-1])
+            else:
+                metadata["folder_path"] = []
+                metadata["folder_path_str"] = ""
+
+        print(f"[DropboxCrawler] Done: {filename}, folder: {metadata.get('folder_path_str', '')}")
+        return content, filename, metadata
