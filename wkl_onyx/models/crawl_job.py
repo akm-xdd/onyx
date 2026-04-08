@@ -14,6 +14,9 @@ class CrawlJob(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    name: Mapped[str | None] = mapped_column(String, nullable=True)
+    consecutive_failures: Mapped[int] = mapped_column(Integer, default=0)
+    failure_reason: Mapped[str | None] = mapped_column(String, nullable=True)
 
     credential = relationship("Credential")
     runs = relationship("CrawlRun", back_populates="crawl_job", cascade="all, delete")

@@ -1,7 +1,9 @@
 # api/files.py
+import json
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from storage import get_storage
 from models.crawl_job import CrawlJob
+from models.crawl_run import CrawlRun
 from models.credential import Credential
 from core.db import get_db
 from sqlalchemy.orm import Session
@@ -15,6 +17,31 @@ ALLOWED_EXTENSIONS = {
     ".pdf", ".doc", ".docx", ".txt", ".md", ".csv",
     ".xls", ".xlsx", ".pptx", ".json", ".html", ".rtf",
 }
+
+
+def _get_last_run_info(db: Session, crawl_job_id: int) -> dict:
+    """Get the last run status and failed files for a crawl job."""
+    last_run = (
+        db.query(CrawlRun)
+        .filter(CrawlRun.crawl_job_id == crawl_job_id)
+        .order_by(CrawlRun.created_at.desc())
+        .first()
+    )
+    if not last_run:
+        return {"last_run_status": None, "failed_files": []}
+    
+    failed_files = []
+    if last_run.error:
+        try:
+            error_data = json.loads(last_run.error)
+            failed_files = error_data.get("failed_files", [])
+        except (json.JSONDecodeError, TypeError):
+            pass
+    
+    return {
+        "last_run_status": last_run.status,
+        "failed_files": failed_files,
+    }
 
 
 def _safe_filename(name: str) -> str:
@@ -77,12 +104,15 @@ def get_status(
         if not job:
             raise HTTPException(404, "Crawl job not found")
         prefix = job_prefix(user_email, job.source_type, job.id, job.name)
+        run_info = _get_last_run_info(db, job.id)
         return {
             "scope": "crawl_job",
             "crawl_job_id": job.id,
             "name": job.name,
             "source_type": job.source_type,
             "file_count": storage.count(prefix),
+            "last_run_status": run_info["last_run_status"],
+            "failed_files": run_info["failed_files"],
         }
 
     # Single credential
@@ -99,7 +129,15 @@ def get_status(
         total = 0
         for j in jobs:
             c = storage.count(job_prefix(user_email, j.source_type, j.id, j.name))
-            per_job.append({"crawl_job_id": j.id, "name": j.name, "source_type": j.source_type, "file_count": c})
+            run_info = _get_last_run_info(db, j.id)
+            per_job.append({
+                "crawl_job_id": j.id,
+                "name": j.name,
+                "source_type": j.source_type,
+                "file_count": c,
+                "last_run_status": run_info["last_run_status"],
+                "failed_files": run_info["failed_files"],
+            })
             total += c
         return {
             "scope": "credential",
@@ -109,9 +147,52 @@ def get_status(
         }
 
     # All for user
-    total = storage.count(f"{_safe_segment(user_email)}/")
+    user_prefix = f"{_safe_segment(user_email)}/"
+    
+    credentials = db.query(Credential).filter(Credential.user_email == user_email).all()
+    source_type_counts: dict[str, int] = {}
+    credential_info: list[dict] = []
+    total = 0
+    
+    for cred in credentials:
+        jobs = db.query(CrawlJob).filter(CrawlJob.credential_id == cred.id).all()
+        cred_total = 0
+        job_details = []
+        
+        for j in jobs:
+            prefix = job_prefix(user_email, j.source_type, j.id, j.name)
+            count = storage.count(prefix)
+            run_info = _get_last_run_info(db, j.id)
+            job_details.append({
+                "crawl_job_id": j.id,
+                "name": j.name,
+                "source_type": j.source_type,
+                "file_count": count,
+                "last_run_status": run_info["last_run_status"],
+                "failed_files": run_info["failed_files"],
+            })
+            cred_total += count
+            if j.source_type not in source_type_counts:
+                source_type_counts[j.source_type] = 0
+            source_type_counts[j.source_type] += count
+        
+        credential_info.append({
+            "credential_id": cred.id,
+            "source_type": cred.source_type,
+            "file_count": cred_total,
+            "crawl_jobs": job_details
+        })
+        total += cred_total
+    
+    sources = [
+        {"source_type": st, "file_count": count}
+        for st, count in sorted(source_type_counts.items())
+    ]
+    
     return {
         "scope": "user",
         "user_email": user_email,
         "total_file_count": total,
+        "sources": sources,
+        "credentials": credential_info,
     }

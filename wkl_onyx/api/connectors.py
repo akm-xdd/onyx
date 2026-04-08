@@ -1,13 +1,17 @@
 # api/connectors.py
 import json
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException, Form, Query
 from sqlalchemy.orm import Session
 from core.db import get_db
 from models.credential import Credential
 from models.crawl_job import CrawlJob
+from models.crawl_run import CrawlRun
 from models.connector_type import ConnectorType
 from models.connector_field import ConnectorFieldSchema
 from tasks.crawl import trigger_crawl
+from validators.credential_validators import VALIDATOR_MAP
 
 router = APIRouter(prefix="/connectors", tags=["connectors"])
 
@@ -237,6 +241,8 @@ def get_crawl_jobs_by_user(
             "is_active": cj.is_active,
             "last_run_at": cj.last_run_at,
             "created_at": cj.created_at,
+            "consecutive_failures": cj.consecutive_failures,
+            "failure_reason": cj.failure_reason,
         }
         for cj in crawl_jobs
     ]
@@ -247,7 +253,107 @@ def update_crawl_job(crawl_job_id: int, db: Session = Depends(get_db)):
     crawl_job = db.query(CrawlJob).filter(CrawlJob.id == crawl_job_id).first()
     if not crawl_job:
         raise HTTPException(404, "Crawl job not found")
+    
+    if not crawl_job.is_active:
+        crawl_job.consecutive_failures = 0
+        crawl_job.failure_reason = None
+    
     crawl_job.is_active = not crawl_job.is_active
     db.commit()
     db.refresh(crawl_job)
-    return {"crawl_job_id": crawl_job.id, "is_active": crawl_job.is_active}
+    return {
+        "crawl_job_id": crawl_job.id,
+        "is_active": crawl_job.is_active,
+        "consecutive_failures": crawl_job.consecutive_failures,
+        "failure_reason": crawl_job.failure_reason,
+    }
+
+
+
+@router.post("/admin/clear-data")
+def clear_connector_data(db: Session = Depends(get_db)):
+    """Truncate crawl_jobs and credentials tables."""
+    from sqlalchemy import text
+
+    try:
+        db.execute(text("TRUNCATE TABLE crawl_jobs CASCADE"))
+        db.execute(text("TRUNCATE TABLE credentials CASCADE"))
+
+        db.commit()
+        return {"status": "success", "message": "crawl_jobs and credentials tables truncated"}
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "message": str(e)}
+
+
+@router.post("/validate-credentials")
+def validate_credentials(
+    source_type: str,
+    credentials: dict[str, Any],
+    config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    config = config or {}
+
+    if source_type not in VALIDATOR_MAP:
+        supported = list(VALIDATOR_MAP.keys())
+        return {
+            "valid": False,
+            "source_type": source_type,
+            "api_calls": [],
+            "error": f"Unsupported source_type: {source_type}. Supported: {supported}",
+            "error_code": "UNSUPPORTED_SOURCE_TYPE",
+        }
+
+    validator = VALIDATOR_MAP[source_type]
+
+    if source_type in ("web", "google_drive"):
+        result = validator(credentials, config)
+    else:
+        result = validator(credentials)
+
+    return {
+        "valid": result.valid,
+        "source_type": result.source_type,
+        "api_calls": [
+            {
+                "url": call.url,
+                "method": call.method,
+                "status_code": call.status_code,
+                "response_summary": call.response_summary,
+                "success": call.success,
+                "duration_ms": round(call.duration_ms, 2),
+            }
+            for call in result.api_calls
+        ],
+        "error": result.error,
+        "error_code": result.error_code,
+    }
+
+
+@router.post("/credentials/{credential_id}/validate")
+def validate_credential_by_id(
+    credential_id: int,
+    config: dict[str, Any] | None = None,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    credential = db.query(Credential).filter(Credential.id == credential_id).first()
+    if not credential:
+        return {
+            "valid": False,
+            "source_type": "unknown",
+            "api_calls": [],
+            "error": f"Credential {credential_id} not found",
+            "error_code": "NOT_FOUND",
+        }
+
+    request_body = {
+        "source_type": credential.source_type,
+        "credentials": credential.credential_json,
+        "config": config or {},
+    }
+
+    return validate_credentials(
+        source_type=request_body["source_type"],
+        credentials=request_body["credentials"],
+        config=request_body["config"],
+    )

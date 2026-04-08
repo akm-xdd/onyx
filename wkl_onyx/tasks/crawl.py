@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 from datetime import datetime, timedelta, timezone
@@ -31,6 +32,7 @@ def job_prefix(user_email: str, source_type: str, job_id: int, job_name: str | N
 def _upload_files(crawler, files, source_type, job_id, job_name, user_email, storage):
     count = 0
     errors = 0
+    failed_files: list[dict] = []
     job_segment = _safe_segment(job_name) if job_name else str(job_id)
     email_segment = _safe_segment(user_email)
     for file_meta in files:
@@ -39,6 +41,11 @@ def _upload_files(crawler, files, source_type, job_id, job_name, user_email, sto
             if not content:
                 print(f"[trigger_crawl] Failed to process {file_meta.get('name')}: No content")
                 errors += 1
+                failed_files.append({
+                    "id": file_meta.get("id", "unknown"),
+                    "name": file_meta.get("name", "unknown"),
+                    "type": file_meta.get("type") or file_meta.get("mime_type", "unknown"),
+                })
                 continue
             folder_path = metadata.get("folder_path", [])
             folder_prefix = (
@@ -53,7 +60,12 @@ def _upload_files(crawler, files, source_type, job_id, job_name, user_email, sto
         except Exception as e:
             print(f"[trigger_crawl] Failed to process {file_meta.get('name')}: {e}")
             errors += 1
-    return count, errors
+            failed_files.append({
+                "id": file_meta.get("id", "unknown"),
+                "name": file_meta.get("name", "unknown"),
+                "type": file_meta.get("type") or file_meta.get("mime_type", "unknown"),
+            })
+    return count, errors, failed_files
 
 @celery_app.task(bind=True, name="trigger_crawl")
 def trigger_crawl(self, crawl_job_id: int):
@@ -128,7 +140,7 @@ def trigger_crawl(self, crawl_job_id: int):
         # will move to singleton
         storage = get_storage()
 
-        total_count, total_errors = _run_crawl_loop(
+        total_count, total_errors, all_failed_files = _run_crawl_loop(
             crawler, source_type, job_id, job_name, user_email, storage,
             crawl_job_id, checkpoint_data, start_time=0 if not is_incremental else start_time
         )
@@ -138,12 +150,25 @@ def trigger_crawl(self, crawl_job_id: int):
             run = db.query(CrawlRun).filter(CrawlRun.id == run_id).first()
             if total_errors == 0:
                 run.status = RunStatus.SUCCESS
-            elif total_count == 0:
-                run.status = RunStatus.FAILED
-                run.error = f"All {total_errors} files failed"
             else:
-                run.status = RunStatus.COMPLETED_WITH_ERRORS
-                run.error = f"{total_errors} of {total_count + total_errors} files failed"
+                failed_file_names = [f["name"] for f in all_failed_files]
+                if total_count == 0:
+                    run.status = RunStatus.FAILED
+                    if len(failed_file_names) <= 5:
+                        human_message = f"All {total_errors} files failed: {', '.join(failed_file_names)}"
+                    else:
+                        human_message = f"All {total_errors} files failed: {', '.join(failed_file_names[:5])}, ..."
+                else:
+                    run.status = RunStatus.COMPLETED_WITH_ERRORS
+                    if len(failed_file_names) <= 5:
+                        human_message = f"{total_errors} of {total_count + total_errors} files failed: {', '.join(failed_file_names)}"
+                    else:
+                        human_message = f"{total_errors} of {total_count + total_errors} files failed: {', '.join(failed_file_names[:5])}, ..."
+                error_data = {
+                    "message": human_message,
+                    "failed_files": all_failed_files
+                }
+                run.error = json.dumps(error_data)
             run.completed_at = datetime.utcnow()
             run.docs_processed = total_count
 
@@ -152,9 +177,23 @@ def trigger_crawl(self, crawl_job_id: int):
             if job:
                 job.last_run_at = datetime.utcnow()
 
-            # disable web scraping task after successful run
-            if source_type == "web" and run.status == RunStatus.SUCCESS:
-                job.is_active = False
+                try:
+                    if run.status in (RunStatus.SUCCESS, RunStatus.COMPLETED_WITH_ERRORS):
+                        job.consecutive_failures = 0
+                        job.failure_reason = None
+                    elif run.status == RunStatus.FAILED:
+                        job.consecutive_failures = (job.consecutive_failures or 0) + 1
+                        job.failure_reason = run.error[:500] if run.error else "Unknown error"
+
+                        if job.consecutive_failures >= 5:
+                            job.is_active = False
+                            print(f"[trigger_crawl] Job {crawl_job_id} disabled after {job.consecutive_failures} consecutive failures: {job.failure_reason}")
+
+                    # disable web scraping task after successful run
+                    if source_type == "web" and run.status == RunStatus.SUCCESS:
+                        job.is_active = False
+                except AttributeError:
+                    pass
 
             db.commit()
             print(f"[trigger_crawl] Run {run_id} → {run.status} ({total_count} uploaded, {total_errors} errors)")
@@ -162,13 +201,25 @@ def trigger_crawl(self, crawl_job_id: int):
     except Exception as e:
         print(f"[trigger_crawl] Fatal error: {e}")
         if run_id:
-            with SessionLocal() as db:
-                run = db.query(CrawlRun).filter(CrawlRun.id == run_id).first()
-                if run:
-                    run.status = RunStatus.FAILED
-                    run.error = str(e)[:500]
-                    run.completed_at = datetime.utcnow()
-                    db.commit()
+                with SessionLocal() as db:
+                    run = db.query(CrawlRun).filter(CrawlRun.id == run_id).first()
+                    if run:
+                        run.status = RunStatus.FAILED
+                        run.error = str(e)[:500]
+                        run.completed_at = datetime.utcnow()
+                        db.commit()
+
+                    try:
+                        job = db.query(CrawlJob).filter(CrawlJob.id == crawl_job_id).first()
+                        if job:
+                            job.consecutive_failures = (job.consecutive_failures or 0) + 1
+                            job.failure_reason = str(e)[:500]
+                            if job.consecutive_failures >= 5:
+                                job.is_active = False
+                                print(f"[trigger_crawl] Job {crawl_job_id} disabled after {job.consecutive_failures} consecutive failures: {job.failure_reason}")
+                            db.commit()
+                    except AttributeError:
+                        pass
         raise
     finally:
         _redis.delete(lock_key)
@@ -212,12 +263,14 @@ def _get_checkpoint(db, crawl_job_id: int, is_incremental: bool) -> dict | None:
 def _run_crawl_loop(crawler, source_type, job_id, job_name, user_email, storage, crawl_job_id, checkpoint_data, start_time):
     total_count = 0
     total_errors = 0
+    all_failed_files: list[dict] = []
 
     while True:
         files, next_checkpoint = crawler.fetch_files(checkpoint_data, start=start_time)
-        count, errors = _upload_files(crawler, files, source_type, job_id, job_name, user_email, storage)
+        count, errors, failed_files = _upload_files(crawler, files, source_type, job_id, job_name, user_email, storage)
         total_count += count
         total_errors += errors
+        all_failed_files.extend(failed_files)
 
         with SessionLocal() as db:
             db.add(Checkpoint(crawl_job_id=crawl_job_id, checkpoint_json=next_checkpoint))
@@ -234,4 +287,4 @@ def _run_crawl_loop(crawler, source_type, job_id, job_name, user_email, storage,
             if len(files) == 0 or not next_checkpoint.get("has_more", False):
                 break
 
-    return total_count, total_errors
+    return total_count, total_errors, all_failed_files
