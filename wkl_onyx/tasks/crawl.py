@@ -11,6 +11,7 @@ from models.credential import Credential
 from models.crawl_job import CrawlJob
 from models.crawl_run import CrawlRun, RunStatus, RunType
 from models.checkpoint import Checkpoint
+from models.failed_file import FailedFile, RetryStatus
 from storage import get_storage
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -41,11 +42,7 @@ def _upload_files(crawler, files, source_type, job_id, job_name, user_email, sto
             if not content:
                 print(f"[trigger_crawl] Failed to process {file_meta.get('name')}: No content")
                 errors += 1
-                failed_files.append({
-                    "id": file_meta.get("id", "unknown"),
-                    "name": file_meta.get("name", "unknown"),
-                    "type": file_meta.get("type") or file_meta.get("mime_type", "unknown"),
-                })
+                failed_files.append(file_meta)
                 continue
             folder_path = metadata.get("folder_path", [])
             folder_prefix = (
@@ -60,11 +57,7 @@ def _upload_files(crawler, files, source_type, job_id, job_name, user_email, sto
         except Exception as e:
             print(f"[trigger_crawl] Failed to process {file_meta.get('name')}: {e}")
             errors += 1
-            failed_files.append({
-                "id": file_meta.get("id", "unknown"),
-                "name": file_meta.get("name", "unknown"),
-                "type": file_meta.get("type") or file_meta.get("mime_type", "unknown"),
-            })
+            failed_files.append(file_meta)
     return count, errors, failed_files
 
 @celery_app.task(bind=True, name="trigger_crawl")
@@ -145,13 +138,24 @@ def trigger_crawl(self, crawl_job_id: int):
             crawl_job_id, checkpoint_data, start_time=0 if not is_incremental else start_time
         )
 
+        # retry failed files once
+        try:
+            recovered, all_failed_files = _retry_failed_files(
+                crawler, all_failed_files, source_type, job_id, job_name, user_email, storage, run_id
+            )
+
+            total_count += recovered
+            total_errors -= recovered
+        except Exception as e:
+            print(f"[trigger_crawl] Failed to retry failed files: {e}")
+
         # write final status
         with SessionLocal() as db:
             run = db.query(CrawlRun).filter(CrawlRun.id == run_id).first()
             if total_errors == 0:
                 run.status = RunStatus.SUCCESS
             else:
-                failed_file_names = [f["name"] for f in all_failed_files]
+                failed_file_names = [f.get("name", f.get("id", "unknown")) for f in all_failed_files]
                 if total_count == 0:
                     run.status = RunStatus.FAILED
                     if len(failed_file_names) <= 5:
@@ -288,3 +292,71 @@ def _run_crawl_loop(crawler, source_type, job_id, job_name, user_email, storage,
                 break
 
     return total_count, total_errors, all_failed_files
+
+def _retry_failed_files(crawler, failed_files, source_type, job_id, job_name, user_email, storage, run_id):
+    """Retry failed files once. Returns (recovered_count, still_failed)."""
+    if not failed_files:
+        return 0, []
+
+    print(f"[trigger_crawl] Retrying {len(failed_files)} failed files for run {run_id}")
+
+    # So as pending first
+    with SessionLocal() as db:
+        for f in failed_files:
+            db.add(FailedFile(
+                crawl_run_id=run_id,
+                file_meta=f,
+                status=RetryStatus.PENDING,
+            ))
+        db.commit()
+
+    recovered = 0
+    still_failed: list[dict] = []
+    retry_results: list = []  # (file_meta, success, error)
+
+    job_segment = _safe_segment(job_name) if job_name else str(job_id)
+    email_segment = _safe_segment(user_email)
+
+    for file_meta in failed_files:
+        try:
+            content, filename, metadata = crawler.download(file_meta)
+            if not content:
+                retry_results.append((file_meta, False, "No content on retry"))
+                still_failed.append(file_meta)
+                continue
+
+            folder_path = metadata.get("folder_path", [])
+            folder_prefix = (
+                "/".join(_safe_segment(p) for p in folder_path)
+                if folder_path
+                else _safe_segment(file_meta.get("id", "unknown"))
+            )
+            storage_key = f"{email_segment}/{source_type}/{job_segment}/{folder_prefix}/{filename}"
+            storage.upload(storage_key, content)
+            print(f"[trigger_crawl] Retry succeeded: {storage_key}")
+            recovered += 1
+            retry_results.append((file_meta, True, None))
+        except Exception as e:
+            print(f"[trigger_crawl] Retry failed for {file_meta.get('name')}: {e}")
+            still_failed.append(file_meta)
+            retry_results.append((file_meta, False, str(e)[:500]))
+
+    # Update FailedFile rows with outcomes
+    with SessionLocal() as db:
+        rows = (
+            db.query(FailedFile)
+            .filter(FailedFile.crawl_run_id == run_id)
+            .all()
+        )
+        # Index by file id for quick lookup
+        by_id = {r.file_meta.get("id"): r for r in rows}
+        for file_meta, success, err in retry_results:
+            row = by_id.get(file_meta.get("id"))
+            if not row:
+                continue
+            row.retry_count = 1
+            row.status = RetryStatus.SUCCESS if success else RetryStatus.FAILED
+            row.error_message = err
+        db.commit()
+
+    return recovered, still_failed
