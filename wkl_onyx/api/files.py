@@ -112,9 +112,7 @@ def get_status(
             .filter(
                 CrawlJob.id == crawl_job_id,
                 Credential.user_email == user_email,
-                CrawlJob.is_active == True,
                 CrawlJob.is_deleted == False,
-                Credential.is_active == True,
                 Credential.is_deleted == False,
             )
             .first()
@@ -140,7 +138,6 @@ def get_status(
             .filter(
                 Credential.id == credential_id,
                 Credential.user_email == user_email,
-                Credential.is_active == True,
                 Credential.is_deleted == False,
             )
             .first()
@@ -149,7 +146,6 @@ def get_status(
             raise HTTPException(404, "Credential not found")
         jobs = db.query(CrawlJob).filter(
             CrawlJob.credential_id == credential_id,
-            CrawlJob.is_active == True,
             CrawlJob.is_deleted == False,
         ).all()
         per_job = []
@@ -178,7 +174,6 @@ def get_status(
     
     credentials = db.query(Credential).filter(
         Credential.user_email == user_email,
-        Credential.is_active == True,
         Credential.is_deleted == False,
     ).all()
     source_type_counts: dict[str, int] = {}
@@ -188,7 +183,6 @@ def get_status(
     for cred in credentials:
         jobs = db.query(CrawlJob).filter(
             CrawlJob.credential_id == cred.id,
-            CrawlJob.is_active == True,
             CrawlJob.is_deleted == False,
         ).all()
         cred_total = 0
