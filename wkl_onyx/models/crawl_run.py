@@ -10,6 +10,7 @@ class RunStatus:
     SUCCESS = "success"
     FAILED = "failed"
     COMPLETED_WITH_ERRORS = "completed_with_errors"
+    CANCELLED = "cancelled"
 
 
 class RunType:

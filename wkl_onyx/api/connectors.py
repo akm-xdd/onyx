@@ -7,13 +7,19 @@ from sqlalchemy.orm import Session
 from core.db import get_db
 from models.credential import Credential
 from models.crawl_job import CrawlJob
+from models.crawl_run import CrawlRun, RunStatus
 from models.connector_type import ConnectorType
 from models.connector_field import ConnectorFieldSchema
 from tasks.crawl import trigger_crawl
 from validators.credential_validators import VALIDATOR_MAP
+from pydantic import BaseModel
+from typing import Literal
+from datetime import datetime
 
 router = APIRouter(prefix="/connectors", tags=["connectors"])
 
+class ManualTriggerRequest(BaseModel):
+    run_type: Literal["full", "incremental"] = "incremental"
 
 @router.get("/sources")
 def list_sources(db: Session = Depends(get_db)):
@@ -166,6 +172,39 @@ def create_crawl_job(
     trigger_crawl.delay(crawl_job.id)
     return {"crawl_job_id": crawl_job.id}
 
+
+@router.post("/crawl-jobs/{crawl_job_id}/trigger")
+def manual_trigger_crawl(
+    crawl_job_id: int,
+    body: ManualTriggerRequest,
+    db: Session = Depends(get_db),
+):
+    crawl_job = db.query(CrawlJob).filter(CrawlJob.id == crawl_job_id).first()
+    if not crawl_job:
+        raise HTTPException(404, "Crawl job not found")
+
+    if not crawl_job.is_active:
+        raise HTTPException(400, "Crawl job is inactive. Activate it before triggering.")
+
+    active_run = db.query(CrawlRun).filter(
+        CrawlRun.crawl_job_id == crawl_job_id,
+        CrawlRun.status == RunStatus.RUNNING,
+    ).first()
+
+    if active_run:
+        active_run.status = RunStatus.CANCELLED
+        active_run.completed_at = datetime.utcnow()
+        db.commit()
+        return {
+            "crawl_job_id": crawl_job_id,
+            "cancelled_run_id": active_run.id,
+            "status": "cancellation_initiated",
+            "message": "Active run is being cancelled. Trigger again once the run stops.",
+        }
+
+    force_full = body.run_type == "full"
+    trigger_crawl.delay(crawl_job_id, force_full_crawl=force_full)
+    return {"crawl_job_id": crawl_job_id, "run_type": body.run_type, "status": "triggered"}
 
 @router.get("/credentials")
 def get_credentials(

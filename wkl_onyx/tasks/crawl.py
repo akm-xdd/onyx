@@ -27,6 +27,9 @@ LOCK_TTL = 2 * 3600
 STALE_RUN_TIMEOUT_HOURS = 2
 
 
+class CrawlCancelledError(Exception):
+    pass
+
 def _safe_segment(name: str) -> str:
     return name.strip().replace("/", "_").replace(":", "_").replace("?", "_").replace("#", "_") or "_"
 
@@ -64,7 +67,7 @@ def _upload_files(crawler, files, source_type, job_id, job_name, user_email, sto
     return count, errors, failed_files
 
 @celery_app.task(bind=True, name="trigger_crawl")
-def trigger_crawl(self, crawl_job_id: int):
+def trigger_crawl(self, crawl_job_id: int, force_full_crawl: bool = False):
 
     with SessionLocal() as db:
         _recover_stale_runs(db, crawl_job_id)
@@ -93,7 +96,7 @@ def trigger_crawl(self, crawl_job_id: int):
                 logger.warning(f"[trigger_crawl] Job {crawl_job_id} already has an active run, skipping")
                 return
 
-            last_successful = (
+            last_successful = None if force_full_crawl else (
                 db.query(CrawlRun)
                 .filter(
                     CrawlRun.crawl_job_id == crawl_job_id,
@@ -105,7 +108,7 @@ def trigger_crawl(self, crawl_job_id: int):
             is_incremental = last_successful is not None
             start_time = last_successful.completed_at.replace(tzinfo=timezone.utc).timestamp() if is_incremental else 0
 
-            checkpoint_data = _get_checkpoint(db, crawl_job_id, is_incremental)
+            checkpoint_data = _get_checkpoint(db, crawl_job_id, is_incremental, force_full_crawl)
 
             run = CrawlRun(
                 crawl_job_id=crawl_job_id,
@@ -138,7 +141,8 @@ def trigger_crawl(self, crawl_job_id: int):
 
         total_count, total_errors, all_failed_files = _run_crawl_loop(
             crawler, source_type, job_id, job_name, user_email, storage,
-            crawl_job_id, checkpoint_data, start_time=0 if not is_incremental else start_time
+            crawl_job_id, checkpoint_data, start_time=0 if not is_incremental else start_time,
+            run_id=run_id
         )
 
         # retry failed files once
@@ -205,6 +209,13 @@ def trigger_crawl(self, crawl_job_id: int):
             db.commit()
             logger.info(f"[trigger_crawl] Run {run_id} → {run.status} ({total_count} uploaded, {total_errors} errors)")
 
+    except CrawlCancelledError:
+            logger.info(f"[trigger_crawl] Run {run_id} was cancelled manually, exiting")
+            with SessionLocal() as db:
+                job = db.query(CrawlJob).filter(CrawlJob.id == crawl_job_id).first()
+                if job:
+                    job.last_run_at = datetime.utcnow()
+                    db.commit()
     except Exception as e:
         logger.exception(f"[trigger_crawl] Fatal error: {e}")
         if run_id:
@@ -253,8 +264,8 @@ def _recover_stale_runs(db, crawl_job_id: int) -> None:
         db.commit()
 
 
-def _get_checkpoint(db, crawl_job_id: int, is_incremental: bool) -> dict | None:
-    if is_incremental:
+def _get_checkpoint(db, crawl_job_id: int, is_incremental: bool, force_full: bool = False) -> dict | None:
+    if is_incremental or force_full:
         return None
     
     # For full crawl resumption
@@ -267,12 +278,19 @@ def _get_checkpoint(db, crawl_job_id: int, is_incremental: bool) -> dict | None:
     return dict(last.checkpoint_json) if last else None
 
 
-def _run_crawl_loop(crawler, source_type, job_id, job_name, user_email, storage, crawl_job_id, checkpoint_data, start_time):
+def _run_crawl_loop(crawler, source_type, job_id, job_name, user_email, storage, crawl_job_id, checkpoint_data, start_time, run_id):
     total_count = 0
     total_errors = 0
     all_failed_files: list[dict] = []
 
     while True:
+        # check for canceleed run
+        with SessionLocal() as db:
+            run = db.query(CrawlRun).filter(CrawlRun.id == run_id).first()
+            if run and run.status == RunStatus.CANCELLED:
+                logger.info(f"[trigger_crawl] Run {run_id} was cancelled manually, exiting")
+                raise CrawlCancelledError()
+
         files, next_checkpoint = crawler.fetch_files(checkpoint_data, start=start_time)
         count, errors, failed_files = _upload_files(crawler, files, source_type, job_id, job_name, user_email, storage)
         total_count += count
