@@ -287,9 +287,14 @@ def validate_dropbox(credentials: dict[str, Any]) -> ValidationResult:
     """Validate Dropbox access token."""
     result = ValidationResult(valid=False, source_type="dropbox")
 
-    token = credentials.get("dropbox_access_token")
+    dropbox_tokens = credentials.get("dropbox_tokens", {})
+    token = dropbox_tokens.get("access_token")
+
     if not token:
-        result.error = "Missing dropbox_access_token"
+        token = credentials.get("dropbox_access_token")
+
+    if not token:
+        result.error = "Missing dropbox_tokens.access_token"
         result.error_code = "MISSING_CREDENTIAL"
         return result
 

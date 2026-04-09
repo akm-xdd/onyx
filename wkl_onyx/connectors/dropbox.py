@@ -16,9 +16,13 @@ class DropboxCrawler(BaseCrawler):
         super().__init__(crawl_job, credential)
         cred = credential.credential_json
 
+        dropbox_tokens = cred.get("dropbox_tokens", {})
+        access_token = dropbox_tokens.get("access_token")
+        refresh_token = dropbox_tokens.get("refresh_token")
+
         self._dbx = Dropbox(
-            oauth2_access_token=cred["dropbox_access_token"],
-            oauth2_refresh_token=cred["dropbox_refresh_token"],
+            oauth2_access_token=access_token,
+            oauth2_refresh_token=refresh_token,
             app_key=settings.DROPBOX_APP_KEY,
             app_secret=settings.DROPBOX_APP_SECRET,
         )
