@@ -1,3 +1,7 @@
+"""
+Purely for backend testing, will be removed in production. From frontend we will handle the oauth flow.
+"""
+
 import httpx
 import secrets
 from datetime import datetime, timedelta, timezone

@@ -28,6 +28,7 @@ STALE_RUN_TIMEOUT_HOURS = 2
 
 
 class CrawlCancelledError(Exception):
+    """ Raised when a crawl is cancelled. Fail silently for mnost cases"""
     pass
 
 def _safe_segment(name: str) -> str:

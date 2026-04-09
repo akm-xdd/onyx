@@ -1,4 +1,7 @@
 # api/oauth.py
+"""
+Purely for backend testing, will be removed in production. From frontend we will handle the oauth flow.
+"""
 import requests
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import RedirectResponse

@@ -9,6 +9,10 @@ from connectors.dropbox import DropboxCrawler
 # from connectors.gmail import GmailCrawler
 # from connectors.sharepoint import SharepointCrawler
 
+"""
+Only google_drive and dropbox are complete. Others might break because of too many changes from onyx and in our own code
+"""
+
 WKL_CRAWLER_MAP: dict[str, type[BaseCrawler]] = {
     "google_drive": GoogleDriveCrawler,
     # "github": GithubCrawler,
