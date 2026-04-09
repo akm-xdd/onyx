@@ -127,6 +127,7 @@ def get_status(
             "name": job.name,
             "source_type": job.source_type,
             "file_count": storage.count(prefix),
+            "is_active": job.is_active,
             "last_run_status": run_info["last_run_status"],
             "failed_files": run_info["failed_files"],
         }
@@ -158,6 +159,7 @@ def get_status(
                 "name": j.name,
                 "source_type": j.source_type,
                 "file_count": c,
+                "is_active": j.is_active,
                 "last_run_status": run_info["last_run_status"],
                 "failed_files": run_info["failed_files"],
             })
@@ -197,6 +199,7 @@ def get_status(
                 "name": j.name,
                 "source_type": j.source_type,
                 "file_count": count,
+                "is_active": j.is_active,
                 "last_run_status": run_info["last_run_status"],
                 "failed_files": run_info["failed_files"],
             })

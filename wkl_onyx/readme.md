@@ -6,6 +6,17 @@ The service is dumb. It only picks up files and upserts them in storage. It does
 
 ## Basic Setup
 
+Before running the server, you need 2 services running for local development:
+
+```bash
+# change directory to wkl_onyx
+cd wkl_onyx
+
+# start redis and minio (minio will be replaced with azure blob storage)
+docker compose up -d
+```
+Then you can run the backend locally:
+
 ```bash
 # change directory to wkl_onyx (this is our current directory)
 cd wkl_onyx
@@ -72,3 +83,14 @@ General Crawling
 If a job is deleted, it is soft deleted. The job will not be run again, but the existing data will be retained.
 
 Status Endpoints are present to check the status of a connector - number of files, last run time, errors if any, etc.
+
+
+## Folder Structures
+
+Folder structures are maintained per user level by default: 
+
+`<user@email.com>\<source_type>\<connector_id_or_name>\<file_path_with_folder_names>`
+
+Example: 
+
+`anand@wokelo.ai\google_drive\Wokelo\folder1\folder2\file.txt`
