@@ -6,13 +6,11 @@ import time
 from connectors.base import BaseCrawler
 from onyx.connectors.google_drive.connector import GoogleDriveConnector
 from onyx.connectors.google_drive.file_retrieval import DriveFileFieldType
-from onyx.connectors.google_drive.models import GDriveMimeType
 from onyx.connectors.google_utils.resources import get_drive_service
 from onyx.connectors.google_drive.doc_conversion import (
     build_folder_path,
     GOOGLE_MIME_TYPES_TO_EXPORT,
 )
-from core.config import settings
 
 import logging
 
@@ -20,14 +18,6 @@ logger = logging.getLogger(__name__)
 
 DRIVE_FOLDER_TYPE = "application/vnd.google-apps.folder"
 DRIVE_SHORTCUT_TYPE = "application/vnd.google-apps.shortcut"
-
-GOOGLE_EXPORT_MAP = {
-    GDriveMimeType.DOC.value: ("text/plain", ".txt"),
-    GDriveMimeType.SPREADSHEET.value: ("text/csv", ".csv"),
-    GDriveMimeType.PPT.value: ("text/plain", ".txt"),
-}
-
-DEFAULT_BATCH_SIZE = 50
 
 
 class GoogleDriveCrawler(BaseCrawler):
@@ -62,8 +52,6 @@ class GoogleDriveCrawler(BaseCrawler):
         else:
             ckpt = self.connector.build_dummy_checkpoint()
 
-        batch_size = self.crawl_job.config_json.get("batch_size", DEFAULT_BATCH_SIZE)
-        max_size_bytes = settings.MAX_FILE_SIZE_MB * 1024 * 1024
         files = []
         skipped = 0
 
@@ -88,7 +76,7 @@ class GoogleDriveCrawler(BaseCrawler):
             size_str = retrieved_file.drive_file.get("size")
             if size_str:
                 size = int(size_str)
-                if size > max_size_bytes:
+                if size > self.max_file_size_bytes:
                     logger.warning(f"[fetch_files] Skipping large file: {retrieved_file.drive_file.get('name')} ({size / 1024 / 1024:.1f} MB)")
                     skipped += 1
                     continue
@@ -104,13 +92,11 @@ class GoogleDriveCrawler(BaseCrawler):
                 "owners": retrieved_file.drive_file.get("owners", []),
             })
 
-            if len(files) >= batch_size:
+            if len(files) >= self.batch_size:
                 break
 
         logger.info(f"[fetch_files] Fetched {len(files)} files, skipped {skipped} large files")
-        next_checkpoint = ckpt.model_dump(mode="json")
-        return files, next_checkpoint
-
+        return files, ckpt.model_dump(mode="json")
 
     def download(self, file_meta: dict) -> tuple[bytes, str, dict]:
         service = get_drive_service(self.connector.creds, file_meta["user_email"])
@@ -118,7 +104,7 @@ class GoogleDriveCrawler(BaseCrawler):
         file_name = file_meta["name"]
         mime_type = file_meta["mimeType"]
         size = file_meta.get("size")
-        max_size = settings.MAX_FILE_SIZE_MB * 1024 * 1024
+        max_size = self.max_file_size_bytes
 
         logger.info(f"[download] Starting: {file_name} ({f'{size / 1024 / 1024:.1f} MB' if size else 'unknown size'})")
 

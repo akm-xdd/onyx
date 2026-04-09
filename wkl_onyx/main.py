@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from api.oauth import router as oauth_router
 from api.files import router as files_router
 from api.connectors import router as connectors_router
+from api.dropbox_oauth import router as dropbox_oauth_router
 
 from core.logger import setup_logging
 
@@ -21,6 +22,7 @@ app.add_middleware(
 app.include_router(oauth_router)
 app.include_router(files_router)
 app.include_router(connectors_router)
+app.include_router(dropbox_oauth_router)
 
 @app.get("/health")
 def health():

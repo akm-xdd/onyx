@@ -5,35 +5,33 @@ from dropbox.files import FileMetadata  # type: ignore[import-untyped]
 from connectors.base import BaseCrawler
 from core.config import settings
 from onyx.connectors.dropbox.connector import DropboxConnector
+from dropbox import Dropbox
 import logging
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_BATCH_SIZE = 100
 
 
 class DropboxCrawler(BaseCrawler):
     def __init__(self, crawl_job, credential):
         super().__init__(crawl_job, credential)
-        config = crawl_job.config_json or {}
+        cred = credential.credential_json
 
-        self.connector = DropboxConnector(
-            batch_size=config.get("batch_size", DEFAULT_BATCH_SIZE),
+        self._dbx = Dropbox(
+            oauth2_access_token=cred["dropbox_access_token"],
+            oauth2_refresh_token=cred["dropbox_refresh_token"],
+            app_key=settings.DROPBOX_APP_KEY,
+            app_secret=settings.DROPBOX_APP_SECRET,
         )
-        self.connector.load_credentials(credential.credential_json)
-        self.batch_size = config.get("batch_size", DEFAULT_BATCH_SIZE)
+
+        self.connector = DropboxConnector(batch_size=self.batch_size)
+        self.connector.dropbox_client = self._dbx
 
     @property
     def _client(self):
-        """Authenticated Dropbox SDK client, set up by Onyx's load_credentials."""
-        if self.connector.dropbox_client is None:
-            raise RuntimeError("Dropbox client not initialized — call load_credentials first")
-        return self.connector.dropbox_client
+        return self._dbx
 
     def fetch_files(self, checkpoint: dict | None, start: float = 0) -> tuple[list[dict], dict]:
-        """List files from Dropbox using the SDK directly (metadata only)."""
         items: list[dict] = []
-        max_size_bytes = settings.MAX_FILE_SIZE_MB * 1024 * 1024
         skipped = 0
 
         cursor = checkpoint.get("cursor") if checkpoint else None
@@ -47,12 +45,10 @@ class DropboxCrawler(BaseCrawler):
                 include_non_downloadable_files=False,
             )
 
-        # Process all entries from this page
         for entry in result.entries:
             if not isinstance(entry, FileMetadata):
                 continue
 
-            # Incremental: skip files older than last successful run
             if start > 0 and entry.client_modified:
                 modified = entry.client_modified
                 if modified.tzinfo is None:
@@ -60,8 +56,7 @@ class DropboxCrawler(BaseCrawler):
                 if modified.timestamp() < start:
                     continue
 
-            # Skip oversized files
-            if entry.size and entry.size > max_size_bytes:
+            if entry.size and entry.size > self.max_file_size_bytes:
                 logger.warning(f"[DropboxCrawler] Skipping large file: {entry.name} ({entry.size / 1024 / 1024:.1f} MB)")
                 skipped += 1
                 continue
@@ -72,19 +67,14 @@ class DropboxCrawler(BaseCrawler):
                 "path_display": entry.path_display,
                 "size": entry.size,
                 "client_modified": (
-                    entry.client_modified.isoformat()
-                    if entry.client_modified
-                    else None
+                    entry.client_modified.isoformat() if entry.client_modified else None
                 ),
             })
 
         logger.info(f"[DropboxCrawler] Page returned {len(items)} files, skipped {skipped} large files, has_more={result.has_more}")
 
-        next_checkpoint = {
-            "cursor": result.cursor,
-            "has_more": result.has_more,
-        }
-        return items, next_checkpoint
+        return items, {"cursor": result.cursor, "has_more": result.has_more}
+
 
     def download(self, file_meta: dict) -> tuple[bytes, str, dict]:
         """Download a single file's content from Dropbox via the SDK.

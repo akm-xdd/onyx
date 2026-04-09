@@ -49,12 +49,11 @@ def _upload_files(crawler, files, source_type, job_id, job_name, user_email, sto
                 failed_files.append(file_meta)
                 continue
             folder_path = metadata.get("folder_path", [])
-            folder_prefix = (
-                "/".join(_safe_segment(p) for p in folder_path)
-                if folder_path
-                else _safe_segment(file_meta["id"])
-            )
-            storage_key = f"{email_segment}/{source_type}/{job_segment}/{folder_prefix}/{filename}"
+            if folder_path:
+                folder_prefix = "/".join(_safe_segment(p) for p in folder_path)
+                storage_key = f"{email_segment}/{source_type}/{job_segment}/{folder_prefix}/{filename}"
+            else:
+                storage_key = f"{email_segment}/{source_type}/{job_segment}/{filename}"
             storage.upload(storage_key, content)
             logger.info(f"[trigger_crawl] Uploaded: {storage_key}")
             count += 1
@@ -330,12 +329,11 @@ def _retry_failed_files(crawler, failed_files, source_type, job_id, job_name, us
                 continue
 
             folder_path = metadata.get("folder_path", [])
-            folder_prefix = (
-                "/".join(_safe_segment(p) for p in folder_path)
-                if folder_path
-                else _safe_segment(file_meta.get("id", "unknown"))
-            )
-            storage_key = f"{email_segment}/{source_type}/{job_segment}/{folder_prefix}/{filename}"
+            if folder_path:
+                folder_prefix = "/".join(_safe_segment(p) for p in folder_path)
+                storage_key = f"{email_segment}/{source_type}/{job_segment}/{folder_prefix}/{filename}"
+            else:
+                storage_key = f"{email_segment}/{source_type}/{job_segment}/{filename}"
             storage.upload(storage_key, content)
             logger.info(f"[trigger_crawl] Retry succeeded: {storage_key}")
             recovered += 1

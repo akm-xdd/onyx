@@ -30,7 +30,13 @@ class Settings(BaseSettings):
     MAX_DRIVE_WORKERS: int = 5
 
     MAX_FILE_SIZE_MB: int = 10
+    DEFAULT_BATCH_SIZE: int = 50
 
+    DROPBOX_APP_KEY: str = ""
+    DROPBOX_APP_SECRET: str = ""
+    BACKEND_URL: str = "http://localhost:8000"
+    FRONTEND_URL: str = "http://localhost:3000"
+    
     @property
     def SQLALCHEMY_DATABASE_URL(self) -> str:
         return (
