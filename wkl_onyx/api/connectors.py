@@ -414,11 +414,13 @@ def validate_credential_by_id(
 
 @router.delete("/crawl-jobs/{crawl_job_id}")
 def delete_crawl_job(crawl_job_id: int, db: Session = Depends(get_db)):
-    crawl_job = db.query(CrawlJob).filter(CrawlJob.id == crawl_job_id).first()
+    crawl_job = db.query(CrawlJob).filter(
+        CrawlJob.id == crawl_job_id,
+        CrawlJob.is_deleted == False,
+    ).first()
     if not crawl_job:
         raise HTTPException(404, "Crawl job not found")
 
-    # cancel active run
     active_run = db.query(CrawlRun).filter(
         CrawlRun.crawl_job_id == crawl_job_id,
         CrawlRun.status == RunStatus.RUNNING,
@@ -427,6 +429,7 @@ def delete_crawl_job(crawl_job_id: int, db: Session = Depends(get_db)):
         active_run.status = RunStatus.CANCELLED
         active_run.completed_at = datetime.utcnow()
 
+    crawl_job.is_deleted = True
     crawl_job.is_active = False
     db.commit()
     return {"crawl_job_id": crawl_job_id, "status": "deleted"}
@@ -441,8 +444,10 @@ def delete_credential(credential_id: int, db: Session = Depends(get_db)):
     if not credential:
         raise HTTPException(404, "Credential not found")
 
-    # cancel + deactivate all crawl jobs for this credential
-    crawl_jobs = db.query(CrawlJob).filter(CrawlJob.credential_id == credential_id).all()
+    crawl_jobs = db.query(CrawlJob).filter(
+        CrawlJob.credential_id == credential_id,
+        CrawlJob.is_deleted == False,
+    ).all()
     for job in crawl_jobs:
         active_run = db.query(CrawlRun).filter(
             CrawlRun.crawl_job_id == job.id,
@@ -451,6 +456,7 @@ def delete_credential(credential_id: int, db: Session = Depends(get_db)):
         if active_run:
             active_run.status = RunStatus.CANCELLED
             active_run.completed_at = datetime.utcnow()
+        job.is_deleted = True
         job.is_active = False
 
     credential.is_deleted = True

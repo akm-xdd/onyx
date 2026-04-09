@@ -12,6 +12,7 @@ class CrawlJob(Base):
     source_type: Mapped[str] = mapped_column(String, nullable=False)
     config_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_deleted: Mapped[bool] = mapped_column(Boolean, default=False)
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     name: Mapped[str | None] = mapped_column(String, nullable=True)

@@ -109,7 +109,7 @@ def get_status(
         job = (
             db.query(CrawlJob)
             .join(Credential, CrawlJob.credential_id == Credential.id)
-            .filter(CrawlJob.id == crawl_job_id, Credential.user_email == user_email)
+            .filter(CrawlJob.id == crawl_job_id, Credential.user_email == user_email, CrawlJob.is_active == True, Credential.is_active == True, Credential.is_deleted == False)
             .first()
         )
         if not job:
