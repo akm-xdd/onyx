@@ -7,7 +7,6 @@ from sqlalchemy.orm import Session
 from core.db import get_db
 from models.credential import Credential
 from models.crawl_job import CrawlJob
-from models.crawl_run import CrawlRun
 from models.connector_type import ConnectorType
 from models.connector_field import ConnectorFieldSchema
 from tasks.crawl import trigger_crawl
@@ -125,6 +124,23 @@ def create_crawl_job(
             "include_my_drives": False,
             "include_files_shared_with_me": False,
         }
+    if source_type == "dropbox":
+        raw = parsed_config.get("root_paths") or ""
+        if isinstance(raw, str):
+            raw = [p.strip() for p in raw.split(",")]
+        else:
+            raw = [str(p).strip() for p in raw]
+
+        normalized: list[str] = []
+        for p in raw:
+            if not p:
+                continue
+            p = p.rstrip("/")
+            if not p.startswith("/"):
+                p = "/" + p
+            normalized.append(p)
+
+        parsed_config = {"root_paths": normalized or [""]}
 
     
     if source_type == "sharepoint":

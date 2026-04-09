@@ -38,13 +38,27 @@ class DropboxCrawler(BaseCrawler):
         items: list[dict] = []
         skipped = 0
 
-        cursor = checkpoint.get("cursor") if checkpoint else None
+        # Load root_paths from config, default to entire Dropbox
+        config = self.crawl_job.config_json or {}
+        root_paths: list[str] = config.get("root_paths") or [""]
 
-        if cursor:
-            result = self._client.files_list_folder_continue(cursor)
+        # Checkpoint: {"paths": [{"path": "/Projects/Q1", "cursor": "...", "done": false}, ...]}
+        if checkpoint and "paths" in checkpoint:
+            path_states = checkpoint["paths"]
+        else:
+            path_states = [{"path": p, "cursor": None, "done": False} for p in root_paths]
+
+        # Find the first path that isn't done and crawl one page of it
+        current = next((p for p in path_states if not p["done"]), None)
+        if current is None:
+            # All paths finished
+            return [], {"paths": path_states, "has_more": False}
+
+        if current["cursor"]:
+            result = self._client.files_list_folder_continue(current["cursor"])
         else:
             result = self._client.files_list_folder(
-                "",
+                current["path"],
                 recursive=True,
                 include_non_downloadable_files=False,
             )
@@ -75,10 +89,20 @@ class DropboxCrawler(BaseCrawler):
                 ),
             })
 
-        logger.info(f"[DropboxCrawler] Page returned {len(items)} files, skipped {skipped} large files, has_more={result.has_more}")
+        # Update this path's checkpoint
+        current["cursor"] = result.cursor
+        if not result.has_more:
+            current["done"] = True
 
-        return items, {"cursor": result.cursor, "has_more": result.has_more}
+        # Any path still not done
+        any_more = any(not p["done"] for p in path_states)
 
+        logger.info(
+            f"[DropboxCrawler] Path {current['path']}: {len(items)} files, "
+            f"skipped {skipped}, path_done={current['done']}, any_more={any_more}"
+        )
+
+        return items, {"paths": path_states, "has_more": any_more}
 
     def download(self, file_meta: dict) -> tuple[bytes, str, dict]:
         """Download a single file's content from Dropbox via the SDK.
