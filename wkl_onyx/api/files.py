@@ -109,7 +109,14 @@ def get_status(
         job = (
             db.query(CrawlJob)
             .join(Credential, CrawlJob.credential_id == Credential.id)
-            .filter(CrawlJob.id == crawl_job_id, Credential.user_email == user_email, CrawlJob.is_active == True, Credential.is_active == True, Credential.is_deleted == False)
+            .filter(
+                CrawlJob.id == crawl_job_id,
+                Credential.user_email == user_email,
+                CrawlJob.is_active == True,
+                CrawlJob.is_deleted == False,
+                Credential.is_active == True,
+                Credential.is_deleted == False,
+            )
             .first()
         )
         if not job:
@@ -130,12 +137,21 @@ def get_status(
     if credential_id is not None:
         cred = (
             db.query(Credential)
-            .filter(Credential.id == credential_id, Credential.user_email == user_email)
+            .filter(
+                Credential.id == credential_id,
+                Credential.user_email == user_email,
+                Credential.is_active == True,
+                Credential.is_deleted == False,
+            )
             .first()
         )
         if not cred:
             raise HTTPException(404, "Credential not found")
-        jobs = db.query(CrawlJob).filter(CrawlJob.credential_id == credential_id).all()
+        jobs = db.query(CrawlJob).filter(
+            CrawlJob.credential_id == credential_id,
+            CrawlJob.is_active == True,
+            CrawlJob.is_deleted == False,
+        ).all()
         per_job = []
         total = 0
         for j in jobs:
@@ -160,13 +176,21 @@ def get_status(
     # All for user
     user_prefix = f"{_safe_segment(user_email)}/"
     
-    credentials = db.query(Credential).filter(Credential.user_email == user_email).all()
+    credentials = db.query(Credential).filter(
+        Credential.user_email == user_email,
+        Credential.is_active == True,
+        Credential.is_deleted == False,
+    ).all()
     source_type_counts: dict[str, int] = {}
     credential_info: list[dict] = []
     total = 0
     
     for cred in credentials:
-        jobs = db.query(CrawlJob).filter(CrawlJob.credential_id == cred.id).all()
+        jobs = db.query(CrawlJob).filter(
+            CrawlJob.credential_id == cred.id,
+            CrawlJob.is_active == True,
+            CrawlJob.is_deleted == False,
+        ).all()
         cred_total = 0
         job_details = []
         
